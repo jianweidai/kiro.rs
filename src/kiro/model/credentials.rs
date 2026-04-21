@@ -248,12 +248,26 @@ impl KiroCredentials {
 
     /// 检查凭据是否支持 Opus 模型
     ///
-    /// Free 账号不支持 Opus 模型，需要 PRO 或更高等级订阅
+    /// Free 账号不支持 Opus 模型和 Sonnet 4.6 模型，需要 PRO 或更高等级订阅
     pub fn supports_opus(&self) -> bool {
+        self.is_pro_subscription()
+    }
+
+    /// 检查是否支持 Sonnet 4.6 模型
+    ///
+    /// Free 账号不支持 Sonnet 4.6 模型，需要 PRO 或更高等级订阅
+    pub fn supports_sonnet_4_6(&self) -> bool {
+        self.is_pro_subscription()
+    }
+
+    /// 检查是否为 PRO 或更高等级订阅
+    ///
+    /// 用于判断是否支持高级模型（Opus、Sonnet 4.6 等）
+    fn is_pro_subscription(&self) -> bool {
         match &self.subscription_title {
             Some(title) => {
                 let title_upper = title.to_uppercase();
-                // 如果包含 FREE，则不支持 Opus
+                // 如果包含 FREE，则不是 PRO 订阅
                 !title_upper.contains("FREE")
             }
             // 如果还没有获取订阅信息，暂时允许（首次使用时会获取）

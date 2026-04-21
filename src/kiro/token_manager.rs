@@ -697,9 +697,15 @@ impl MultiTokenManager {
     fn select_next_credential(&self, model: Option<&str>) -> Option<(u64, KiroCredentials)> {
         let entries = self.entries.lock();
 
-        // 检查是否是 opus 模型
-        let is_opus = model
-            .map(|m| m.to_lowercase().contains("opus"))
+        // 检查模型类型
+        let model_lower = model.map(|m| m.to_lowercase());
+        let is_opus = model_lower
+            .as_ref()
+            .map(|m| m.contains("opus"))
+            .unwrap_or(false);
+        let is_sonnet_4_6 = model_lower
+            .as_ref()
+            .map(|m| m.contains("sonnet") && (m.contains("4.6") || m.contains("4-6")))
             .unwrap_or(false);
 
         // 过滤可用凭据
@@ -711,6 +717,10 @@ impl MultiTokenManager {
                 }
                 // 如果是 opus 模型，需要检查订阅等级
                 if is_opus && !e.credentials.supports_opus() {
+                    return false;
+                }
+                // 如果是 sonnet 4.6 模型，需要检查订阅等级
+                if is_sonnet_4_6 && !e.credentials.supports_sonnet_4_6() {
                     return false;
                 }
                 true
