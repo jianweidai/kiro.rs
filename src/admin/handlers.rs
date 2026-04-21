@@ -122,6 +122,18 @@ pub async fn force_refresh_token(
     }
 }
 
+/// POST /api/admin/credentials/:id/test
+/// 测试凭据是否真正可用（发送测试消息）
+pub async fn test_credential(
+    State(state): State<AdminState>,
+    Path(id): Path<u64>,
+) -> impl IntoResponse {
+    match state.service.test_credential(id).await {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
 /// GET /api/admin/config/load-balancing
 /// 获取负载均衡模式
 pub async fn get_load_balancing_mode(State(state): State<AdminState>) -> impl IntoResponse {

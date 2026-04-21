@@ -125,6 +125,47 @@ impl KiroProvider {
         self.call_mcp_with_retry(request_body).await
     }
 
+    /// 使用指定凭据发送 API 请求（用于测试特定凭据）
+    ///
+    /// 与 `call_api` 不同，此方法不会故障转移到其他凭据，
+    /// 仅使用指定的凭据发送请求，用于验证特定凭据是否可用。
+    pub async fn call_api_for_credential(
+        &self,
+        credential_id: u64,
+        request_body: &str,
+    ) -> anyhow::Result<reqwest::Response> {
+        // 获取指定凭据的上下文
+        let ctx = self.token_manager
+            .acquire_context_for(credential_id)
+            .await?;
+
+        let config = self.token_manager.config();
+        let machine_id = machine_id::generate_from_credentials(&ctx.credentials, config);
+
+        let endpoint = self.endpoint_for(&ctx.credentials)?;
+
+        let rctx = RequestContext {
+            credentials: &ctx.credentials,
+            token: &ctx.token,
+            machine_id: &machine_id,
+            config,
+        };
+
+        let url = endpoint.api_url(&rctx);
+        let body = endpoint.transform_api_body(request_body, &rctx);
+
+        let base = self
+            .client_for(&ctx.credentials)?
+            .post(&url)
+            .body(body)
+            .header("content-type", "application/json")
+            .header("Connection", "close");
+        let request = endpoint.decorate_api(base, &rctx);
+
+        let response = request.send().await?;
+        Ok(response)
+    }
+
     /// 内部方法：带重试逻辑的 MCP API 调用
     async fn call_mcp_with_retry(&self, request_body: &str) -> anyhow::Result<reqwest::Response> {
         let total_credentials = self.token_manager.total_count();

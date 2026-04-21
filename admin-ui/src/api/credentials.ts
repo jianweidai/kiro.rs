@@ -79,6 +79,20 @@ export async function getCredentialBalance(id: number): Promise<BalanceResponse>
   return data
 }
 
+// 测试凭据是否可用（发送测试消息）
+export interface TestCredentialResponse {
+  id: number
+  success: boolean
+  message: string
+  latencyMs?: number
+  error?: string
+}
+
+export async function testCredential(id: number): Promise<TestCredentialResponse> {
+  const { data } = await api.post<TestCredentialResponse>(`/credentials/${id}/test`)
+  return data
+}
+
 // 添加新凭据
 export async function addCredential(
   req: AddCredentialRequest

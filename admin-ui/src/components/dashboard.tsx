@@ -13,7 +13,7 @@ import { BatchImportDialog } from '@/components/batch-import-dialog'
 import { KamImportDialog } from '@/components/kam-import-dialog'
 import { BatchVerifyDialog, type VerifyResult } from '@/components/batch-verify-dialog'
 import { useCredentials, useDeleteCredential, useResetFailure, useLoadBalancingMode, useSetLoadBalancingMode } from '@/hooks/use-credentials'
-import { getCredentialBalance, forceRefreshToken } from '@/api/credentials'
+import { getCredentialBalance, forceRefreshToken, testCredential } from '@/api/credentials'
 import { extractErrorMessage } from '@/lib/utils'
 import type { BalanceResponse } from '@/types/api'
 
@@ -485,6 +485,101 @@ export function Dashboard({ onLogout }: DashboardProps) {
     }
   }
 
+  // 批量真实验活（发送测试消息）
+  const handleBatchRealTest = async () => {
+    if (selectedIds.size === 0) {
+      toast.error('请先选择要验活的凭据')
+      return
+    }
+
+    // 初始化状态
+    setVerifying(true)
+    cancelVerifyRef.current = false
+    const ids = Array.from(selectedIds)
+    setVerifyProgress({ current: 0, total: ids.length })
+
+    let successCount = 0
+
+    // 初始化结果，所有凭据状态为 pending
+    const initialResults = new Map<number, VerifyResult>()
+    ids.forEach(id => {
+      initialResults.set(id, { id, status: 'pending' })
+    })
+    setVerifyResults(initialResults)
+    setVerifyDialogOpen(true)
+
+    // 开始真实验活
+    for (let i = 0; i < ids.length; i++) {
+      // 检查是否取消
+      if (cancelVerifyRef.current) {
+        toast.info('已取消验活')
+        break
+      }
+
+      const id = ids[i]
+
+      // 更新当前凭据状态为 verifying
+      setVerifyResults(prev => {
+        const newResults = new Map(prev)
+        newResults.set(id, { id, status: 'verifying' })
+        return newResults
+      })
+
+      try {
+        const result = await testCredential(id)
+        if (result.success) {
+          successCount++
+          // 更新为成功状态
+          setVerifyResults(prev => {
+            const newResults = new Map(prev)
+            newResults.set(id, {
+              id,
+              status: 'success',
+              usage: result.latencyMs ? `${result.latencyMs}ms` : undefined
+            })
+            return newResults
+          })
+        } else {
+          // 测试失败
+          setVerifyResults(prev => {
+            const newResults = new Map(prev)
+            newResults.set(id, {
+              id,
+              status: 'failed',
+              error: result.error || result.message
+            })
+            return newResults
+          })
+        }
+      } catch (error) {
+        // 更新为失败状态
+        setVerifyResults(prev => {
+          const newResults = new Map(prev)
+          newResults.set(id, {
+            id,
+            status: 'failed',
+            error: extractErrorMessage(error)
+          })
+          return newResults
+        })
+      }
+
+      // 更新进度
+      setVerifyProgress({ current: i + 1, total: ids.length })
+
+      // 添加延迟防止封号（最后一个不需要延迟）
+      if (i < ids.length - 1 && !cancelVerifyRef.current) {
+        await new Promise(resolve => setTimeout(resolve, 3000))
+      }
+    }
+
+    setVerifying(false)
+
+    if (!cancelVerifyRef.current) {
+      toast.success(`真实验活完成：成功 ${successCount}/${ids.length}`)
+    }
+  }
+
   // 取消验活
   const handleCancelVerify = () => {
     cancelVerifyRef.current = true
@@ -623,9 +718,13 @@ export function Dashboard({ onLogout }: DashboardProps) {
             <div className="flex gap-2">
               {selectedIds.size > 0 && (
                 <>
-                  <Button onClick={handleBatchVerify} size="sm" variant="outline">
+                  <Button onClick={handleBatchVerify} size="sm" variant="outline" title="仅检查 Token 是否有效">
                     <CheckCircle2 className="h-4 w-4 mr-2" />
-                    批量验活
+                    快速验活
+                  </Button>
+                  <Button onClick={handleBatchRealTest} size="sm" variant="outline" title="发送测试消息验证账号是否可用">
+                    <CheckCircle2 className="h-4 w-4 mr-2" />
+                    真实验活
                   </Button>
                   <Button
                     onClick={handleBatchForceRefresh}

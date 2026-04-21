@@ -859,6 +859,28 @@ impl MultiTokenManager {
         }
     }
 
+    /// 获取指定凭据的 API 调用上下文
+    ///
+    /// 与 `acquire_context` 不同，此方法不会故障转移到其他凭据，
+    /// 仅使用指定的凭据获取上下文，用于测试特定凭据是否可用。
+    ///
+    /// # Arguments
+    /// * `credential_id` - 要使用的凭据 ID
+    pub async fn acquire_context_for(&self, credential_id: u64) -> anyhow::Result<CallContext> {
+        // 获取指定凭据
+        let credentials = {
+            let entries = self.entries.lock();
+            entries
+                .iter()
+                .find(|e| e.id == credential_id)
+                .map(|e| e.credentials.clone())
+                .ok_or_else(|| anyhow::anyhow!("凭据 #{} 不存在", credential_id))?
+        };
+
+        // 尝试获取/刷新 Token
+        self.try_ensure_token(credential_id, &credentials).await
+    }
+
     /// 选择优先级最高的未禁用凭据作为当前凭据（内部方法）
     ///
     /// 纯粹按优先级选择，不排除当前凭据，用于优先级变更后立即生效

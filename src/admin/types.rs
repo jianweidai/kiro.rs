@@ -178,6 +178,24 @@ pub struct BalanceResponse {
     pub next_reset_at: Option<f64>,
 }
 
+/// 凭据测试响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestCredentialResponse {
+    /// 凭据 ID
+    pub id: u64,
+    /// 测试是否成功
+    pub success: bool,
+    /// 结果消息
+    pub message: String,
+    /// 请求延迟（毫秒）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    /// 错误信息（失败时）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 // ============ 负载均衡配置 ============
 
 /// 负载均衡模式响应

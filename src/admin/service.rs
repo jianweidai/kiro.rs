@@ -9,12 +9,14 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::kiro::model::credentials::KiroCredentials;
+use crate::kiro::provider::KiroProvider;
 use crate::kiro::token_manager::MultiTokenManager;
 
 use super::error::AdminServiceError;
 use super::types::{
     AddCredentialRequest, AddCredentialResponse, BalanceResponse, CredentialStatusItem,
     CredentialsStatusResponse, LoadBalancingModeResponse, SetLoadBalancingModeRequest,
+    TestCredentialResponse,
 };
 
 /// 余额缓存过期时间（秒），5 分钟
@@ -34,6 +36,7 @@ struct CachedBalance {
 /// 封装所有 Admin API 的业务逻辑
 pub struct AdminService {
     token_manager: Arc<MultiTokenManager>,
+    provider: Arc<KiroProvider>,
     balance_cache: Mutex<HashMap<u64, CachedBalance>>,
     cache_path: Option<PathBuf>,
     /// 已注册的端点名称集合（用于 add_credential 校验）
@@ -43,6 +46,7 @@ pub struct AdminService {
 impl AdminService {
     pub fn new(
         token_manager: Arc<MultiTokenManager>,
+        provider: Arc<KiroProvider>,
         known_endpoints: impl IntoIterator<Item = String>,
     ) -> Self {
         let cache_path = token_manager
@@ -53,6 +57,7 @@ impl AdminService {
 
         Self {
             token_manager,
+            provider,
             balance_cache: Mutex::new(balance_cache),
             cache_path,
             known_endpoints: known_endpoints.into_iter().collect(),
@@ -307,6 +312,66 @@ impl AdminService {
             .map_err(|e| self.classify_balance_error(e, id))
     }
 
+    /// 测试凭据是否真正可用（发送一条测试消息）
+    ///
+    /// 与 `get_balance` 不同，此方法会实际发送一条消息到 Kiro API，
+    /// 验证凭据不仅 token 有效，而且账号未被封禁、可以正常使用。
+    pub async fn test_credential(&self, id: u64) -> Result<TestCredentialResponse, AdminServiceError> {
+        use std::time::Instant;
+
+        // 验证凭据存在
+        let snapshot = self.token_manager.snapshot();
+        if !snapshot.entries.iter().any(|e| e.id == id) {
+            return Err(AdminServiceError::NotFound { id });
+        }
+
+        // 构建最小测试请求
+        let test_request = serde_json::json!({
+            "conversationState": {
+                "conversationId": format!("test-{}-{}", id, Utc::now().timestamp_millis()),
+                "currentMessage": {
+                    "userInputMessage": {
+                        "content": "how are you",
+                        "userInputMessageContext": {},
+                        "modelId": "claude-sonnet-4-20250514"
+                    }
+                },
+                "chatTriggerType": "MANUAL"
+            }
+        });
+
+        let request_body = serde_json::to_string(&test_request)
+            .map_err(|e| AdminServiceError::InternalError(format!("序列化测试请求失败: {}", e)))?;
+
+        // 发送测试请求并计时
+        let start = Instant::now();
+        let response = self.provider
+            .call_api_for_credential(id, &request_body)
+            .await
+            .map_err(|e| self.classify_test_error(e, id))?;
+
+        let latency_ms = start.elapsed().as_millis() as u64;
+        let status = response.status();
+
+        if status.is_success() {
+            // 成功：凭据可用
+            Ok(TestCredentialResponse {
+                id,
+                success: true,
+                message: "凭据测试成功，账号可正常使用".to_string(),
+                latency_ms: Some(latency_ms),
+                error: None,
+            })
+        } else {
+            // 失败：读取错误信息
+            let body = response.text().await.unwrap_or_default();
+            Err(AdminServiceError::UpstreamError(format!(
+                "测试请求失败: {} {}",
+                status, body
+            )))
+        }
+    }
+
     // ============ 余额缓存持久化 ============
 
     fn load_balance_cache_from(cache_path: &Option<PathBuf>) -> HashMap<u64, CachedBalance> {
@@ -450,6 +515,37 @@ impl AdminService {
             AdminServiceError::NotFound { id }
         } else if msg.contains("只能删除已禁用的凭据") || msg.contains("请先禁用凭据") {
             AdminServiceError::InvalidCredential(msg)
+        } else {
+            AdminServiceError::InternalError(msg)
+        }
+    }
+
+    /// 分类测试凭据错误
+    fn classify_test_error(&self, e: anyhow::Error, id: u64) -> AdminServiceError {
+        let msg = e.to_string();
+
+        // 1. 凭据不存在
+        if msg.contains("不存在") {
+            return AdminServiceError::NotFound { id };
+        }
+
+        // 2. 上游服务错误特征
+        let is_upstream_error =
+            msg.contains("凭证已过期或无效") ||
+            msg.contains("权限不足") ||
+            msg.contains("已被限流") ||
+            msg.contains("服务器错误") ||
+            msg.contains("暂时不可用") ||
+            msg.contains("MONTHLY_REQUEST_COUNT") ||
+            msg.contains("bearer token") ||
+            msg.contains("error trying to connect") ||
+            msg.contains("connection") ||
+            msg.contains("timeout") ||
+            msg.contains("timed out") ||
+            msg.contains("API 请求失败");
+
+        if is_upstream_error {
+            AdminServiceError::UpstreamError(msg)
         } else {
             AdminServiceError::InternalError(msg)
         }
